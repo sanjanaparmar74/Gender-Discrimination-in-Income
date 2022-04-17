@@ -1,0 +1,1355 @@
+---
+title: "Final Project: Analysis of the Income Gap between Male and Female - Based on the NLSY97 Dataset"
+date: "2020/12/14"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 4
+    theme: paper
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+<font size=3>**Load Libraries**</font>
+
+```{r message=FALSE}
+# Basic Packages
+library(tidyverse)
+library(knitr)
+library(ggplot2)
+
+# Supplementary Packages
+library(kableExtra)
+library(gridExtra)
+library(foreign)
+library(sandwich)
+library(lmtest)
+library(tidyr)
+library(jtools)
+```
+
+
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+# RELOAD my.data, reuse this function at the beginning of each section to ensure the integrity of the data.
+
+
+reload_mydata <- function(){
+  
+  my.data.full <- read_csv('nlsy97_Nov2020.csv')
+  my.data <- my.data.full %>%
+    select(R0000100, B0004600, E8043100, R0070000, R0536300, 
+           R1205300, R1217600, R1482600, R2191500, U0014800, 
+           T6656700, T6657300, U1852400, U2857200)
+  
+  colnames(my.data) <- c("PUB_ID", "CUMULATIVE.GPA", "TOTAL.INC",  "SAFE.SCH",
+                      "SEX", "REL.PARENT", "RESIDENCE", "RACE", "DRUG.USE", "CHILDREN.NUM",
+                      "FAM.INCOME", "EDUCATION.LEVEL", "MARITAL.STATUS",
+                      "INCOME")
+  
+  my.data$SEX <- recode_factor(my.data$SEX, `1` = "Male", `2` = "Female")
+  
+  my.data <- my.data %>%
+    mutate(INCOME.valid = ifelse(INCOME <= 0, 'Skipped/Not Interviewed', 
+                                 ifelse(INCOME < max(INCOME), 'Valid', 'Top-Truncated')))
+  my.data <- my.data %>%
+    filter(INCOME.valid != 'Skipped/Not Interviewed' & INCOME.valid != 'Top-Truncated')
+  
+  my.data <- my.data %>%
+    mutate(FAM.INCOME.valid = ifelse(FAM.INCOME <= 0, 'Skipped/Not Interviewed', 
+                                 ifelse(FAM.INCOME < max(FAM.INCOME), 'Valid', 'Top-Truncated')))
+  my.data <- my.data %>%
+    filter(FAM.INCOME.valid != 'Skipped/Not Interviewed' & FAM.INCOME.valid != 'Top-Truncated')
+  
+  return(my.data)
+}
+
+reload_mydata_untrunc <- function(){
+  
+  my.data.full <- read_csv('nlsy97_Nov2020.csv')
+  my.data <- my.data.full %>%
+    select(R0000100, B0004600, E8043100, R0070000, R0536300, 
+           R1205300, R1217600, R1482600, R2191500, U0014800, 
+           T6656700, T6657300, U1852400, U2857200)
+  
+  colnames(my.data) <- c("PUB_ID", "CUMULATIVE.GPA", "TOTAL.INC",  "SAFE.SCH",
+                      "SEX", "REL.PARENT", "RESIDENCE", "RACE", "DRUG.USE", "CHILDREN.NUM",
+                      "FAM.INCOME", "EDUCATION.LEVEL", "MARITAL.STATUS",
+                      "INCOME")
+  my.data$SEX <- recode_factor(my.data$SEX, `1` = "Male", `2` = "Female")
+  
+  
+  my.data <- my.data %>%
+    mutate(INCOME.valid = ifelse(INCOME <= 0, 'Skipped/Not Interviewed', 
+                                 ifelse(INCOME < max(INCOME), 'Valid', 'Top-Truncated')))
+  my.data <- my.data %>%
+    filter(INCOME.valid != 'Skipped/Not Interviewed')
+  
+  my.data <- my.data %>%
+    mutate(FAM.INCOME.valid = ifelse(FAM.INCOME <= 0, 'Skipped/Not Interviewed', 
+                                 ifelse(FAM.INCOME < max(FAM.INCOME), 'Valid', 'Top-Truncated')))
+  my.data <- my.data %>%
+    filter(FAM.INCOME.valid != 'Skipped/Not Interviewed')
+  
+  return(my.data)
+}
+
+my.data <- reload_mydata()
+```
+
+
+
+### <font color="#C0002B"><b>Part 1 Overview</b></font>
+
+#### **1.1 Introduction**
+
+The National Longitudinal Surveys (NLS) are a set of surveys sponsored by the Bureau of Labor Statistics (BLS) of the U.S. Department of Labor^[1]^ that gather information from several groups of men and women at multiple points in time on the labor market experiences and on their other significant life events.^[2]^ In each cohort, there would usually be several thousands of respondents of similar age and most of whom would be kept tracked of in the follow up surveys in the following years.
+
+The NLSY97 consists of a nationally representative sample of 8,984 men and women born during the years 1980 through 1984 and living in the United States at the time of the initial survey in 1997. Participants were ages 12 to 16 as of December 31, 1996. Interviews were conducted annually from 1997 to 2011 and biennially since then.The ongoing cohort has been surveyed 18 times as of date.^[3]^ Through rounds of surveys, important data about demographic characteristics, individual life tracks, labor market experience etc. are recorded, through which either the economic dynamics and realistic living status of people in the U.S. can be better understood.
+
+Our research focuses on people's income. Through data analysis with the NLSY97 dataset, we hope to find out more about the reason behind the systematic disparity in people's income, specifically between men and women.
+
+#### **1.2 Objective**
+
+Systematic gender discrimination can be a unconspicious yet serious problem for every society. In our analysis, we are hoping to answer the following question:
+
+>  Is there a significant difference in income between men
+and women? 
+> Does the difference vary depending on other factors (e.g.education, marital status, criminal history, drug use, childhood household factors, profession, etc.)?
+
+
+
+#### **1.3 Loading Data and Renaming Variables**
+
+The original dataset `nlsy97.csv` has 95 variable in total. Among them we pick out 12 (except `PUB_ID`) for further analysis.
+
+Given that the original name of these variables are raw codes, we renamed them into accessible ones using the NLSY97 codebook. These variables and their description are listed as below.
+```{css, echo = FALSE}
+caption {
+      color: #444444;
+      font-weight: bold;
+      font-size: 1.2em;
+    }
+```
+
+```{r, echo=FALSE, message=FALSE}
+# RELOAD my.data
+my.data <- reload_mydata()
+my.data <- subset(my.data, select = -c(INCOME.valid, FAM.INCOME.valid))
+my.data.untrunc <- reload_mydata_untrunc()
+
+names(my.data)
+
+my.data.dict <- data.frame(OriginalCode = c("R0000100", "B0004600", "E8043100", 
+                                            "R0070000", "R0536300", "R1205300",
+                                            "R1217600", "R1482600", "R2191500", 
+                                            "U0014800", "T6656700", "T6657300", 
+                                            "U1852400", "U2857200"), 
+                           Variables = names(my.data),
+                           Description = c("Youth case identification code",
+                                           "Overall GPA reported for youth-school",
+                                           "Total number of incarceration",
+                                           "Fell safe at school: agree or disagree?",
+                                           "Gender",
+                                           "Your relationship to household parent figure",
+                                           "Your residence at the age of 12: urban or rural?",
+                                           "Race and ethnicity",
+                                           "Have you ever use cocaine or other hard drugs: yes or no?",
+                                           "The number of biological children you have in household",
+                                           "Gross family income in 2011",
+                                           "Highest degree received prior to the 11/12 academic year",
+                                           "Marital status",
+                                           "Total income from wages and salary in 2016"))
+
+my.data.dict %>%
+  kable(caption = "Table 1.3.1 Variable Names and Description")%>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+
+
+#### **1.4 Descriptive Statistics and Strategy on Top-coded Variables**
+
+##### **1.4.1 Descriptive Statistics**
+
+Basic summary of each variable is shown as below. At this stage, negative values in some variable indicating some types of *missing data* are kept. Further processing on missing data would be discussed in each section in **Part 2**.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+options(scipen=999)
+my.data <- reload_mydata_untrunc()
+my.data <- subset(my.data, select=-c(INCOME.valid, FAM.INCOME.valid))
+summary.table <- data.frame(Min = apply(my.data, 2,  min),
+                            Median = apply(my.data, 2, median),
+                            Max = apply(my.data, 2, max),
+                            Mean = round(sapply(my.data, mean, na.rm=TRUE) ,2),
+                            S.D. = round(apply(my.data, 2, sd), 2))
+
+summary.table %>%
+  kable(caption = "Table 1.4.1 Descriptive Statistics of Variables") %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+
+##### **1.4.2 Strategy on Top-coded Variables**
+
+In the table above, there are two variables that are pre-processed by top-truncation. That means, for the observations that lie outside of top-2% of the distribution, average value of the top 2 percent of cases are applied to replace the original valid non-missing responses. 
+
+This truncation is usually used to control the effects brought by outliers, which, in this case, refer to samples that lie out of the 2% percentile on both sides of the distribution. However, the suppress on the outliers should depend on real situation. If the extreme cases lie too far away from their normal counterparts, and the existences of these cases proves to be a random and considerably low-probability event, then the truncation can still be problematic. And these top-coded samples should be completely ruled out of the analysis.
+
+Besides the 2%-rule, 2-sigma rule and 3-sigma rule are also frequently used to identify outliers. In the table above, the top-code level for variable `INCOME` is \$`r max(my.data$INCOME)`, which is far larger than `mean + 3 * sd`, which is \$`r round(mean(my.data$INCOME)+3*sd(my.data$INCOME), 2)`. The same situation also happens on variable `FAM.INCOME`, with its top-code level being \$`r max(my.data$FAM.INCOME)`, which is even larger than 3-sigma level - \$`r round(mean(my.data$FAM.INCOME)+3*sd(my.data$FAM.INCOME), 2)`.
+
+In this way, we believe that the outliers in these two variables lie *too* far from the normal groups, and we can hence believe that it would cause significant over-estimations if we include them into our analysis.
+
+For example, the table below shows the gender distribution among the `INCOME` outliers, among whom men account for a dominant proportion - among 106 persons who earn extremely high annual salary, only 23 are women. It can be inferred that, although the phenomenon here is meaningful in some ways and can be another valuable topic, this dominating distribution would cause significant over-estimation in the income disparity between men and women.
+
+```{r, echo=FALSE, message=FALSE}
+my.data <- reload_mydata_untrunc() %>%
+  filter(INCOME.valid == "Top-Truncated")
+table(my.data$INCOME.valid, my.data$SEX) %>%
+  kable(caption = "Table 1.4.2 Gender Distribution among Top-coded Observations")%>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+
+```{r, echo=FALSE, message=FALSE}
+my.data <- reload_mydata()
+without.topcode.ttest <- my.data %>%
+  summarize(INCOME.diff = sum(ifelse(SEX=="Male", INCOME, 0))/sum(SEX=="Male")-sum(ifelse(SEX=="Female", INCOME, 0))/sum(SEX=="Female"),
+            low = t.test(my.data$INCOME~my.data$SEX)$conf.int[1],
+            upper = t.test(my.data$INCOME~my.data$SEX)$conf.int[2],
+            p_value = t.test(my.data$INCOME~my.data$SEX)$p.value)
+
+my.data <- reload_mydata_untrunc()
+with.topcode.ttest <- my.data %>%
+  summarize(INCOME.diff = sum(ifelse(SEX=="Male", INCOME, 0))/sum(SEX=="Male")-sum(ifelse(SEX=="Female", INCOME, 0))/sum(SEX=="Female"),
+            low = t.test(my.data$INCOME~my.data$SEX)$conf.int[1],
+            upper = t.test(my.data$INCOME~my.data$SEX)$conf.int[2],
+            p_value = t.test(my.data$INCOME~my.data$SEX)$p.value)
+```
+According to the t-test on the mean difference of `INCOME` between men and women, though statistically significant in both scenarios, there are considerable differences in terms of the extent. If "top-coded" or top-truncated samples are dropped, the income difference between men and women would be \$`r round(without.topcode.ttest$INCOME.diff, 2)`, while this figure is \$`r round(with.topcode.ttest$INCOME.diff,2)` with these samples are included.
+
+So, in our all following sections, all top-truncated observations would be dropped, and our analysis scope is limited to the observations lying in the *normal* range.
+
+
+
+### <font color="#C0002B"><b>Part 2 Statistical Analysis</b></font>
+
+In this part, detailed analysis on selected variable is carried out. We mainly focus on eight topics that are believe to be huge influencing factors on the income disparity between men and women. 
+
+Based on these variables, 1) growing environment, 2) child-raising, 3) criminal history, 4) race, 5) drug use, 6) education, 7) marital status 8) hard times history, 9) family total income and 10) family relationship would be discussed in detail.
+
+#### **2.1 Growing Environment & Income**
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# RELOAD my.data
+mydata <- reload_mydata()
+```
+
+##### **2.1.1 Overview**
+Growing environment in early years of a person can influence his/her personality, physical, and mental development, and can hence change the future perspective of that person. In my.data97 dataset, variables that reflect growing environment include R00700(`SAFE.SCH`) and R12176(`RESIDENCE`). Through analysis between these two variables and the future income variable (`INCOME`), we hope to identify the possible association between one's growing environment and his/her future income.
+We are also interested in whether this effect has any difference between male and female population. So that interactive analysis would also be conducted.
+
+
+##### **2.1.2 Subjective Perception of Campus Safety**
+
+According to the original data, R00700(`SAFE.SCH`) stands for the answers to the question "(Do you) feel safe at school?" Originally, it has four answers, where 1 to 4 stands for subjective recognition of the campus safety status ranging from **Strongly Agree** to **Strongly Disagree**, respectively. However, considering that this variable is a kind of **subjective perception of campus safety**, which can be sequential and can be describe in degree, so that we recoded it reversely, with 1 standing for **Strongly Disagree** (indicating unsafe) and 4 standing for **Strongly Agree** (indicating safe).
+
+
+Negative values in this questions are considered invalid answers and should be dropped. In total, there are `r sum(my.data$SAFE.SCH>=1)` valid answers to this question.
+
+
+
+```{r, echo=FALSE, warning=FALSE}
+my.data <- my.data %>%
+  mutate(SAFE.SCH=recode_factor(SAFE.SCH, `1`="Strongly Agree", `2`="Agree", 
+                                   `3`="Disagree", `4`="Strongly Disagree")) %>%
+  mutate(SAFE.SCH=factor(SAFE.SCH, levels=c("Strongly Disagree", "Disagree",
+                                            "Agree", "Strongly Agree")))
+```
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+safety.percept.summary <- my.data %>%
+  filter(is.na(SAFE.SCH)==FALSE) %>%
+  group_by(SEX, SAFE.SCH) %>%
+  summarize(count=n())
+safety.percept.summary %>%
+  kable(caption = "Table 2.1.1 Summary of Sex and the Subjective Perception of Campus Safety") %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+
+safety.percept <- ggplot(safety.percept.summary, aes(x=SAFE.SCH, y=count, fill=SEX)) + 
+  geom_bar(position="dodge", stat="identity") +
+  xlab("Do you feel safe at school?") +
+  ylab("Number of Respondents") + 
+  labs(title = "Figure 2.1.1 Subjective Perception of Campus Safety by Gender")
+safety.percept
+```
+
+The graph above shows the distribution of answer to the question **"(Do you) feel safe at school?"**. 
+Generally, a greater number of respondents reported feeling safe (Agree/Strongly Agree), while a significantly smaller proportion reported that they did not agree.
+Interestingly, Among people feeling comparatively safe at school, the number of male respondents are slightly more than that of female respondents; on the contrary, among people feeling not so safe at school, female respondents accounted for a larger proportion. **The graph indicates that female could be more likely to feel unsafe at school.**
+
+```{r, echo=FALSE}
+options(scipen=999)
+my.data <- my.data %>%
+  mutate(SAFE.SCH.numeric = as.numeric(SAFE.SCH))
+safety.lm <- lm(INCOME ~ SAFE.SCH.numeric + SEX, data = my.data)
+summary(safety.lm)$coef %>%
+  kable(caption = "Table 2.1.2 Summary of the Basic Model",digits = c(3,3,3,20)) %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+safety.lm.graph <- ggplot(data = my.data,aes(x = SAFE.SCH.numeric, y = INCOME)) + 
+  geom_point() +
+  stat_smooth(method = "lm", fullrange = TRUE) +
+  xlab("The Feeling of Campus Safety") +
+  ylab("Annual Income in 2016 ($)") +
+  labs(title = "Figure 2.1.2 Basic Model")
+
+
+safety.lm.SEX.graph <- ggplot(data = my.data,aes(x = SAFE.SCH.numeric, y = INCOME, colour = SEX)) + 
+  geom_point() +
+  stat_smooth(method = "lm", fullrange = TRUE) +
+  xlab("The Feeling of Campus Safety") +
+  ylab("Annual Income in 2016 ($)") +
+  labs(title = "Figure 2.1.3 Interaction Model")
+
+grid.arrange(safety.lm.graph, safety.lm.SEX.graph, widths = c(0.5, 0.7), ncol = 2)
+```
+
+Assuming the subjective perception of the campus safety reflects the actual situation in most cases, we transformed the factor `SAFE.SCH` into a sequential numeric variable `SAFE.SCH.numeric`, which indicates the degree to which the respondent believe his/her campus to be safe.
+
+Following that, linear models on all samples, male samples, and female samples respectively are fitted.
+Generally speaking, the safety feeling on campus has significant positive effects on the future income. Specifically, for every one level more a child feel safe in his/her school, his/her future income increase by \$`r round(coef(safety.lm)["SAFE.SCH.numeric"],2)` on average.
+
+Looking from the standpoint of gender, similar disparity of average between men and women can still be observed from the separated fitted curve in the graph. In the meantime, the safety feeling did not seem to bring different effects on different gender, given the two fitted curves are almost parallel. Interaction model would be deployed to test whether this inference is true.
+
+```{r, echo=FALSE}
+safety.interact <- lm(INCOME ~ SAFE.SCH.numeric * SEX, data = my.data)
+summary(safety.interact)$coef%>%
+  kable(caption = "Table 2.1.3 Summary of the Interaction Model", digits = c(3,3,3,4)) %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+From this model, we can see that the coefficient in front of the interaction term `SAFE.SCH.numeric:SEXFemale` is not statistically significant, meaning that the safety perception has no significantly different impact on men's and women's future income.
+
+
+
+
+##### **2.1.3 Living Environment: Rural Area versus Urban Area**
+
+Sometimes, rural/urban background can be an influencing factor on people's future development.
+
+According to the original data, R12176(`RESIDENCE`) has two answers, where 0 indicates that **the respondent resided in rural area** at the age of 12, and 1 indicates otherwise. There are `r sum(my.data$RESIDENCE>=0)` valid answers to this question. Negative answers are dropped.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+my.data <- my.data %>%
+  mutate(RESIDENCE=recode_factor(RESIDENCE, `0`="Rural", `1`="Urban", `2`="Unknown", `-3`="Unknown", `-4`="Unknown")) %>%
+  mutate(RESIDENCE=factor(RESIDENCE, levels=c("Rural", "Urban", "Unknown"))) 
+
+RESIDENCE.summary <- table(my.data$RESIDENCE)
+
+my.data <- my.data %>%
+  filter(RESIDENCE != "Unknown" & is.na(RESIDENCE) == FALSE)
+```
+
+Among all the respondents with valid income report, there are `r RESIDENCE.summary["Rural"] + RESIDENCE.summary["Urban"]` valid answers to the question **"(Are you) urban or rural resident at the age of 12?"** Among these respondents, `r RESIDENCE.summary["Rural"]` are rural residents and `r RESIDENCE.summary["Urban"]` are urban residents when they were 12.
+
+```{r, echo=FALSE, warning=FALSE,message=FALSE}
+RESIDENCE.summary <- my.data %>%
+  group_by(SEX, RESIDENCE) %>%
+  summarize(count=n())
+RESIDENCE.summary %>%
+  kable(caption = "Table 2.1.4 Summary of Sex and the Urban/Rural Background") %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+
+
+RESIDENCE.bar <- ggplot(RESIDENCE.summary, aes(x=RESIDENCE, y=count, fill=SEX)) + 
+  geom_bar(position="dodge", stat="identity") +
+  xlab("Living in Rural/Urban Area at the Age of 12") +
+  ylab("Number of Respondents") +
+  labs(title = "Figure 2.1.4 Rural/Urban Background by Gender")
+RESIDENCE.bar
+```
+From this graph, we can see that a great majority of respondents were living in urban areas when they were 12; in both rural and urban area groups, male respondents are slightly more than female.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+RESIDENCE.table <- my.data %>%
+  group_by(RESIDENCE) %>%
+  summarize(INCOME.mean = mean(INCOME),
+            lower = t.test(INCOME)$conf.int[1],
+            upper = t.test(INCOME)$conf.int[2],
+            p_value = t.test(INCOME)$p.value)
+RESIDENCE.table%>%
+  kable(caption = "Table 2.1.5 T-test on the Income by the Urban/Rural Background") %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+
+RESIDENCE.graph <- ggplot(data = RESIDENCE.table, 
+                             aes(x = RESIDENCE, y = INCOME.mean, fill=I("steelblue"))) +
+                      geom_bar(position = "dodge", stat = "identity") +
+                      geom_errorbar(aes(ymin=lower, ymax=upper), 
+                                    width=.3,                    # Width of the error bars
+                                    position=position_dodge(0.9)) +
+                      xlab("Rural/Urban at the Age of 12") +
+                      ylab("Annual Income in 2016 ($)") +
+                      labs(title = "Figure 2.1.6 T-test on Income")
+
+
+RESIDENCE.SEX.table <- my.data %>%
+  group_by(SEX, RESIDENCE) %>%
+  summarize(INCOME.mean = mean(INCOME),
+            lower = t.test(INCOME)$conf.int[1],
+            upper = t.test(INCOME)$conf.int[2],
+            p_value = t.test(INCOME)$p.value)
+RESIDENCE.SEX.table%>%
+  kable(caption = "Table 2.1.6 T-test on Income by Urban/Rural Background & Gender") %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+
+RESIDENCE.SEX.graph <- ggplot(data = RESIDENCE.SEX.table, 
+                             aes(x = RESIDENCE, y = INCOME.mean, fill = SEX)) +
+                      geom_bar(position = "dodge", stat = "identity") +
+                      geom_errorbar(aes(ymin=lower, ymax=upper), 
+                                    width=.3,                    # Width of the error bars
+                                    position=position_dodge(0.9))+
+                      xlab("Rural/Urban at the Age of 12") +
+                      ylab("Annual Income in 2016 ($)") +
+                      labs(title = "Figure 2.1.7 T-test on Income by Gender")
+
+grid.arrange(RESIDENCE.graph, RESIDENCE.SEX.graph, widths = c(0.7, 0.9), ncol = 2)
+```
+
+From the graph on the left, we can see that respondents with different rural/urban background in early years did not have significant difference in their future income. Given that the "Urban" group has more respondents, its confident interval is narrower than that of the "Rural" group.
+
+From an gender perspective, we can still see income disparity between men and women via the graph on the right - men earned significantly more than women in both groups. In terms of same-gender comparison, male with urban background earn slightly more than their rural counterparts, while female with rural background earn slightly more than those female with urban background. But both of these gaps are not statistically significant.
+
+
+#### **2.2 Child-rasing & Income**
+
+```{r, echo=FALSE, message=FALSE}
+my.data <- reload_mydata()
+my.data <- my.data %>%
+  mutate(CHILDREN.NUM=ifelse(CHILDREN.NUM>0, CHILDREN.NUM, 
+                             ifelse(CHILDREN.NUM==-3 | CHILDREN.NUM==-5, NA,
+                                    ifelse(CHILDREN.NUM==-4, 0, NA))))
+```
+
+##### **2.2.1 Overview**
+
+Child-raising can be a big event in many people's life, and can deeply affect one's life track. Raising child/children normally takes a person and his/her family lots of time and resources. For example, women's career development is usually a big trade-off of child-raising.
+
+In this part, we hope to explore how child-raising would affect one's income. From a perspective of gender, we would also like to find out whether child-raising brings the same effects for men and women.
+
+In my.data97, variable that records the number of the respondents' biological children is U00148(`CHILDREN.NUM`). According to the original data, U00148(`CHILDREN.NUM`) has a range from 0 to 9, plus a top-truncated type "10-999", in which there is one sample. In total, there are `r sum(my.data$CHILDREN.NUM>=0)` valid answers to this question.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+CHILDREN.summary <- my.data %>%
+  filter(is.na(CHILDREN.NUM)==FALSE) %>%
+  group_by(CHILDREN.NUM) %>%
+  summarize(count = n())
+CHILDREN.summary%>%
+  kable(caption = "Table 2.2.1 Summary of Number of Biological Children in Household") %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+
+CHILDREN.summary.graph <- ggplot(data = CHILDREN.summary, aes(x = CHILDREN.NUM, y = count, 
+                                                              fill = I("steelblue"))) +
+  geom_bar(stat = "identity") +
+  scale_x_continuous(n.breaks = 7)+
+  xlab("Number of Biological Children in Household") +
+  ylab("Number of Respondents") +
+  labs(title = "Figure 2.2.1 Summary of Number of Biological Children in Household")
+CHILDREN.summary.graph
+```
+
+Generally speaking, a majority of respondents have 1 to 3 children, while there are a small half of people having no child within household and there are around 200 people who have 4 or more children.
+
+##### **2.2.2 How Child-raising Affect Income?**
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+CHILDREN.lm.graph <- ggplot(data = my.data, aes(x = CHILDREN.NUM, y = INCOME)) +
+  geom_point() +
+  stat_smooth(method = "lm", fullrange = TRUE)
+CHILDREN.lm.graph+
+  xlab("Number of Biological Children in Household") +
+  ylab("Annual Income in 2016 ($)") +
+  labs(title = "Figure 2.2.2 Association between Number of Children and Income")
+
+CHILDREN.lm <- lm(INCOME ~ CHILDREN.NUM + SEX, data = my.data)
+summary(CHILDREN.lm)$coef %>%
+  kable(caption = "Table 2.2.2 Summary of the Basic Model") %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+
+From the regression above, we can see that the number of biological children seems to have a negative association to the person's income, the more children someone has, the lower income he/she might probably earn.
+
+Given that the F-statistics is `r round(summary(CHILDREN.lm)$fstatistic["value"], 2)` and is significant on a 0.05 level, this basic model provides a reasonably good fit to the income. We can learn that for one more child a person has, the income would on average decrease \$`r round(-coef(CHILDREN.lm)["CHILDREN.NUM"],2)`.
+
+##### **2.2.3 Does Child-raising Bring Different Effects for Men and Women?**
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+CHILDREN.SEX.lm.graph <- ggplot(data = my.data, aes(x = CHILDREN.NUM, y = INCOME, color = SEX)) +
+  geom_point() +
+  stat_smooth(method = "lm", fullrange = TRUE)
+CHILDREN.SEX.lm.graph +
+  xlab("Number of Biological Children in Household") +
+  ylab("Annual Income in 2016 ($)") +
+  labs(title = "Figure 2.2.3 Interaction between Sex & Children Number on Income")
+
+CHILDREN.SEX.lm <- lm(INCOME ~ CHILDREN.NUM * SEX, data = my.data)
+summary(CHILDREN.SEX.lm)$coef%>%
+  kable(caption = "Table 2.2.3 Summary of the Interaction Model") %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+Seeing from a gender's standpoint, huge difference between male and female can be seen. This interaction model indicates that gender and the child-raising have a significant interactive effect on one's income. 
+
+Specifically, for men, there is a significant positive association between the number of biological children in the household and his income, for one more child in the household, the income tends to increase by \$`r round(coef(CHILDREN.SEX.lm)["CHILDREN.NUM"], 2)` on average; but for women, it is a completely different story. On average, for one more child in the household, an woman's income tends to decrease by \$`r round(-coef(CHILDREN.SEX.lm)["CHILDREN.NUM:SEXFemale"], 2)`. 
+
+These statistics can to some extent prove that women's income development are actually affected by child-raising. Significant gender-wise disparity seems to be very clear in this scenario.
+
+However, the diagnostic graphs indicate that there are also significant drawback in the model above. As is shown by the **Residuals vs Fitted** graph in *Figure 2.2.4*, certain pattern of the variance of the residuals across the fitted `INCOME` can be seen, indicating a non-constant variance (heteroskedasticity) in the random error term. The **Q-Q Plot** on the right also indicates that the residuals do not distribute normally, but have much heavier tails. In this case, the estimation above can be biased.
+
+The ways to improve this model include: 1) transform the `INCOME` into log form `log(INCOME)`; 2) replace the estimated standard error by robust standard error, which can take heteroskedasticity into account and allow some relaxation of the basic assumption.
+
+```{r, echo=FALSE, warning=FALSE}
+par(mfrow = c(2, 2))
+plot(CHILDREN.SEX.lm, caption = "Figure 2.2.4 Diagnostic Graphs\n")
+```
+
+```{r, echo=FALSE, warning=FALSE}
+summ(CHILDREN.SEX.lm, robust = "HC1")$coef%>%
+  kable(col.names = c("Estimate", "Std. Error", "t value", "Pr(>|t|)"),
+        caption = "Table 2.2.4 Summary of the Interaction Model with Robust Std. Error") %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+
+Comparing to *Table 2.2.4*, we can see that the t values in *Table 2.2.3* is slightly smaller than those in the former table, indicating that the possible over-confidence was somewhat corrected. Generally speaking, the outcome in the second table might be less significant but more convincing in case of heteroskedasticity.
+
+
+#### **2.3 Incarceration History & Income**
+
+##### **2.3.1 Overview**
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# RELOAD my.data
+my.data <- reload_mydata()
+```
+Crime history indicates one's personality and people with incarceration history my be rejected by some highly-paid jobs. Therefore, it may affect the income level and further impact the income gap. Table 2.3.1 shows how many incarcerations reported by male and female seperately. More men tended to report more incarcerations. 
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+inc.dis <- my.data %>%
+  group_by(TOTAL.INC,SEX) %>%
+  summarise(n = n())
+inc.dis %>%
+  kable(caption = "Table 2.3.1 Number of Incarcerations Reported by Men and Women") %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+
+`r sum(my.data$TOTAL.INC<0)` males reported negative number. As the number is of people in this group is quite small, and the negative value cannot provide meaningful information, we decide to drop the negative response group. Besides, people that have incarceration history (`r sum(my.data$TOTAL.INC>0)`) is much less than those without incarceration history (`r sum(my.data$TOTAL.INC==0)`). When the number of incarcerations increase, number of respondents in this group decreases to 1 or 0. It is a nonsense to evaulate the income gap of a group when the sample size is small. Therefore, we decide to categorize those with incarceration histroy to Yes group and those without incarceration history to No group for further analysis.
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+my.data <- my.data[!(my.data$TOTAL.INC < 0),]
+my.data <- mutate(my.data, TOTAL.INC = ifelse(TOTAL.INC==0, "No", "Yes"))
+```
+
+After adjusting the original dataset, we can get Figure 2.3.2, which explicitly shows that men are more likely to have incarcerations. 
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+inc.dis.adjust <- my.data %>%
+  group_by(TOTAL.INC,SEX) %>%
+  summarise(n = n())
+ggplot(inc.dis.adjust, aes(x = TOTAL.INC, y = n, fill = SEX, label = n)) + 
+  geom_bar(stat = "identity", position = "dodge") + 
+  ylab("Number of respondents") + xlab("Incarceration or Not") + 
+  labs(title = "Figure 2.3.1 Incarceration History and Sex Features among Respondents") + 
+  geom_text(size = 4, position = position_dodge(width=0.9)) + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+##### **2.3.2 Does Incarceration History Affect Income?**
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+inc.lm <- lm(INCOME ~ SEX + TOTAL.INC, my.data)
+summary(inc.lm)$coef %>%
+  kable(caption = "Table 2.3.2 Summary of the Incarceration Linear Regression") %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+Table 2.3.3 shows the regression result of `INCOME ~ SEX + TOTAL.INC`. It indicates that there is statistically significant relationship between incarceration history and income (p_value = `r round(summary(inc.lm)$coef["TOTAL.INCYes","Pr(>|t|)"],2)`). People with incarceration history earn $`r -coef(inc.lm)["TOTAL.INCYes"]` less than those without incarceration history.
+
+##### **2.3.3 Does Incarceration History Affect Sex-related Income Gap?**
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+inc.inter.lm <- lm(INCOME ~ SEX + TOTAL.INC + TOTAL.INC*SEX, my.data)
+summary(inc.inter.lm)$coef %>%
+  kable(caption = "Table 2.3.3 Summary of the Incarceration Interactive Linear Regression") %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+anova(inc.lm, inc.inter.lm) %>%
+  kable(caption = "Table 2.3.4 Comparison between Simple Model and Original Model") %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+To explore the effect of incarceration on the income gap between men and women, we perform an interactive regression (`INCOME ~ SEX + TOTAL.INC + TOTAL.INC*SEX`). The result is shown in Table 2.3.4. The p_value of the interactive item turns out to be `r round(summary(inc.inter.lm)$coef["SEXFemale:TOTAL.INCYes","Pr(>|t|)"],2)`, suggesting that the variable is not statistically significant. The `anova()` function also gives the same result as exhibited in Table 2.3.5. We may conclude that incarceration history has no significant impact on the income gap between men and women.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+crime.gap.plot <- my.data %>%
+  group_by(TOTAL.INC) %>%
+  summarize(income.crime.gap = mean(INCOME[SEX == "Male"]) - mean(INCOME[SEX == "Female"]),
+            upper = t.test(INCOME ~ SEX)$conf.int[1],
+            lower = t.test(INCOME ~ SEX)$conf.int[2])
+ggplot(crime.gap.plot, aes(x = reorder(TOTAL.INC, income.crime.gap), y = income.crime.gap, fill = TOTAL.INC)) +
+  geom_bar(stat = "identity") + geom_errorbar(aes(ymax = upper, ymin = lower), width = 0.1, size = 1) +
+  ylab("Income Gap between Men and Women") + xlab("Crime or Not") + 
+  labs(title = "Figure 2.3.2 Incarceration and Sex-related Income Gap Bar Plot") + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+In the plot analysis as Figure 2.3.6, we find that the difference between the income gap of No group and Yes group is quite small. Besides, the error bar of Yes group is so large that it overlaps with the bar of No group. However, the conclusion may not that accurate if we consider the relatively small sample size of Yes group (`r sum(my.data$TOTAL.INC == "Yes")`) compared to No group (`r sum(my.data$TOTAL.INC == "No")`). The conclusion may change if there is a larger dataset with a larger number of Yes respondents in total incarceration.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+par(mfrow = c(2, 2))
+plot(inc.inter.lm, caption = "Figure 2.3.3 Diagnostic Graphs")
+```
+
+According to the diagnostic graphs, the residuals do not have constant variance against fitted values. In the normal QQ plot, the residuals are normal, though there is a tailed distribution. There is no discernible trend in the scale-location plot. There is no outlier in the model. 
+
+#### **2.4 Race & Income**
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# RELOAD my.data
+my.data <- reload_mydata()
+my.data$RACE <- as.factor(my.data$RACE)
+my.data <- mutate(my.data,RACE = recode_factor(RACE,
+                                    `1` = "Black",
+                                    `2` = "Hispanic",
+                                    `3` = "Mixed Race (Non-Hispanic)",
+                                    `4` = "Non-Black / Non Hispanic"))
+```
+
+##### **2.4.1 Overview**
+
+Race is one important factor that we would like to look into. We expect that there are variances among different ethnicities, that is, people of different ethnicities may have different sex-related income gaps.
+
+There four factors labeled from 1 to 4 in race variable R14826 (`RACE`) in the dataset, standing for Black, Hispanic, Mixed Race (Non-Hispanic), Non-Black / Non Hispanic respectively. There are `r sum(my.data$RACE == 'Black')` Black respondents, `r sum(my.data$RACE == 'Hispanic')` Hispanic respondents, `r sum(my.data$RACE == 'Mixed Race (Non-Hispanic)')` Mixed Race (Non-Hispanic) respondents, `r sum(my.data$RACE == 'Non-Black / Non Hispanic')` Non-Black / Non Hispanic respondents. There is only a small number of Mixed Race (Non-Hispanic) respondents in the sample, which may bring make our analysis inaccurate. Below is a graphic to show the distribution among race ans sex.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+race.dis <- my.data %>%
+  group_by(RACE, SEX) %>%
+  summarise(n=n())
+ggplot(race.dis, aes(x = RACE, y = n, fill = SEX, label = n)) + geom_bar(stat = "identity", position = "dodge") + 
+  theme(axis.text.x=element_text(angle = -30, vjust = 0.5)) + 
+  ylab("Number of respondents") + xlab("Race") + 
+  labs(title = "Figure 2.4.1 Race and Sex Features among Respondents") + 
+  geom_text(size = 4, position = position_dodge(width=0.9)) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+##### **2.4.2 Does Race Affect the Income Gap between Men and Women?**
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+race.lm <- lm(INCOME ~ SEX + RACE + SEX*RACE, data = my.data)
+
+summary(race.lm)$coef %>%
+  kable(caption = "Table 2.4.1 Summary of the Linear Regression") %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+race.gap.table <- c(-coef(race.lm)["SEXFemale"], 
+              -coef(race.lm)["SEXFemale"] - coef(race.lm)["SEXFemale:RACEHispanic"],
+              -coef(race.lm)["SEXFemale"] - coef(race.lm)["SEXFemale:RACEMixed Race (Non-Hispanic)"], 
+              -coef(race.lm)["SEXFemale"] - coef(race.lm)["SEXFemale:RACENon-Black / Non Hispanic"])
+
+race.gap.df <- data.frame(Race = levels(my.data$RACE), IncomeGap = race.gap.table)
+
+race.gap.df %>%
+  kable(caption = "Table 2.4.2 Summary of Sex-related Income Gaps under Different Race Categories") %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+
+Fisrt, we run a linear regression between income and sex, race. In the model we set “Male” as the baseline category for the (`SEX`) variable and “Black” as the baseline for the (`RACE`) category. The result is shown in Table 2.4.2. It shows great significance between income and sex, income and race, except for Mixed Race (Non-Hispanic) category. The insignificance mainly rises from the limited number of respondents. We cannot give any precise conclusion for Mixed Race (Non-Hispanic) race category of people. Table 2.4.3 shows different income gaps under four different race categories, though the data in Mixed Race (Non-Hispanic) category is not that accurate. As suggested by the regression result, the income gap between black men and black women is the smallest ($`r round(race.gap.table[1],2)`). While the sex-related income gap of Hispanic ($`r round(race.gap.table[2],2)`) shows an increase of $`r round(race.gap.table[2],2)-round(race.gap.table[1],2)` and the gap of Non-Black / Non Hispanic ($`r round(race.gap.table[4],2)`) shows an increase of $`r round(race.gap.table[4],2)-round(race.gap.table[1],2)`. Race does have an impact on the income gap between men and women (at least for Black and other race categories).
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+race.gap.plot <- my.data %>%
+  group_by(RACE) %>%
+  summarize(income.race.gap = mean(INCOME[SEX == "Male"], na.rm = TRUE) - mean(INCOME[SEX == "Female"], na.rm = TRUE),
+            upper = t.test(INCOME ~ SEX)$conf.int[1],
+            lower = t.test(INCOME ~ SEX)$conf.int[2])
+ggplot(race.gap.plot, aes(x = reorder(RACE, income.race.gap), y = income.race.gap, fill = RACE)) +
+  geom_bar(stat = "identity") + geom_errorbar(aes(ymax = upper, ymin = lower), width = 0.1, size = 1) +
+  ylab("Income Gap between Men and Women") + xlab("Race") + 
+  labs(title = "Figure 2.4.2 Race and Sex-related Income Gap Bar Plot") + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+We also examine the relationship through a bar plot with error bars, capturing the difference of average income of men and women under different race categories. The Mixed Race (Non-Hispanic) has a very large error bar, which alighs with the samll sample size in this race category. The income gap in Black is the smallest. Its bar chart does not overlap with that of Non-Black / Non Hispanic and that of Hispanic, based on which we are 95% confident that the sex-related income gap of Black is different from that of other race categories. The income gap of Non-Black / Non Hispanic and that of Hispanic are very close. The information from the plot is similar with that from the regression and we can draw the similar conclusion.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+par(mfrow = c(2, 2))
+plot(race.lm, caption = "Figure 2.4.3 Diagnostic Graphs")
+```
+
+According to the diagnostic graphs, the residuals do not have constant variance against fitted values. The residuals are approxitely normal based on the QQ plot, though there is a tailed distribution. There is no discernible trend in scale-location plot. There is no outlier in the model.
+
+##### **2.4.3 Is it necessary to make an interactive model?**
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+race.lm.simple <- lm(INCOME ~ SEX + RACE, data = my.data)
+anova(race.lm, race.lm.simple) %>%
+  kable(caption = "Table 2.4.3 Comparison between Simple Model and Original Model") %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+We applied `anova()` function to compare a simpler model (`INCOME ~ SEX + RACE`) with the original one (`INCOME ~ SEX + RACE + SEX*RACE`). The result shows that the interaction part has statistically significant additional explanatory power over the simpler model. (maybe show the different of intercept if have time)(maybe move ahead)
+
+#### **2.5 Drug Use & Income**
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# RELOAD my.data
+my.data <- reload_mydata()
+```
+##### **2.5.1 Overview**
+
+We expect that people that never used drug will earn more than those that have ever used drug. But we are curious about whether using drug or not will affect the income gap between men and women. Thus we choose the variable R21915 (`DRUG.USE`) to describe the feature. There are `r sum(my.data$DRUG.USE == 1)`respondents claiming they used drug while `r sum(my.data$DRUG.USE == 0)` claiming not. Apart from Yes and No, there are `r sum(my.data$DRUG.USE == -1)`respondents refusing to report, `r sum(my.data$DRUG.USE == -2)`respondents saying they did not know, and `r sum(my.data$DRUG.USE == -5)`non-interview. We try creating a third category (`Missing`) to capture those group of people. 
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+my.data$DRUG.USE <- as.factor(my.data$DRUG.USE)
+my.data <- mutate(my.data, 
+               DRUG.USE = recode_factor(DRUG.USE,
+                                        `0` = "No",
+                                        `1` = "Yes",
+                                        `-1` = "Missing",
+                                        `-2` = "Missing",
+                                        `-5` = "Missing"))
+```
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+drug.dis <- my.data %>%
+  group_by(DRUG.USE, SEX) %>%
+  summarise(n=n())
+ggplot(drug.dis, aes(x = DRUG.USE, y = n, fill = SEX, label = n)) + 
+  geom_bar(stat = "identity", position = "dodge") + 
+  ylab("Number of respondents") + xlab("Answer of whether using drug") + 
+  labs(title = "Figure 2.5.1 Drug Use and Sex Features among Respondents") + 
+  geom_text(size = 4, position = position_dodge(width=0.9)) + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+drug.avg.income <- my.data %>%
+  group_by(DRUG.USE,SEX) %>%
+  summarise(i = mean(INCOME))
+ggplot(drug.avg.income,aes(x = DRUG.USE,y = i,fill = SEX)) + 
+  geom_bar(stat = "identity", position = "dodge") +
+  ylab("Average income") + xlab("Answer of whether using drug") + 
+  labs(title = "Figure 2.5.2 Drug Use and Average Income") + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+After observing Figure 2.5.2, we find there is no shared feature between Missing group and either group. Though we assume that people not providing answer are those who actually used drug but thought it was socially unacceptable, it makes no sense to merge it to the Yes group because they do not have explicit common feature. Besides, as the Yes group has a small number of respondents, if we merge the Missing group to Yes group, it will largely affect the result of Yes group. In this case, we decide to drop the Missing group. 
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+my.data <- my.data[!(my.data$DRUG.USE == "Missing"),]
+```
+
+##### **2.5.2 Does Drug Use Affect the Income Gap between Men and Women?**
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+drug.lm <- lm(INCOME ~ DRUG.USE + SEX, data = my.data)
+summary(drug.lm)$coef %>%
+  kable(caption = "Table 2.5.1 Summary of the Linear Regression") %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+We first conduct a simple regression model (`INCOME ~ DRUG.USE + SEX`) and the result is in Table 2.5.3. The p_value of DRUG.USE turns out to be `r round(summary(drug.lm)$coef["DRUG.USEYes","Pr(>|t|)"],2)`, which indicates that the variable is not statistically significant. Whether use a drug or not does not significantly related to the income level.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+drug.lm.interactive <- lm(INCOME ~ DRUG.USE + SEX + DRUG.USE*SEX, data = my.data)
+summary(drug.lm.interactive)$coef %>%
+  kable(caption = "Table 2.5.2 Summary of the Linear Regression") %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+
+```
+In the interactive model (`INCOME ~ DRUG.USE + SEX + DRUG.USE*SEX`) as in Table 2.5.4, the p_value of DRUG.USE and the interactive item turns out to be `r round(summary(drug.lm.interactive)$coef["DRUG.USEYes","Pr(>|t|)"],2)` and `r round(summary(drug.lm.interactive)$coef["DRUG.USEYes:SEXFemale","Pr(>|t|)"],2)` respectively, which indicates that either variable is not statistically significant. Whether use a drug or not does not significantly related to the income level or sex-related income gap.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+anova(drug.lm, drug.lm.interactive) %>%
+  kable(caption = "Table 2.5.3 Comparison between Simple Model and Original Model") %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+The `anova()` test in Table 2.5.5 also indicates the same result. It is not necessary to add the interactive value into the model as it does not have additional explanatory power.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+drug.gap.plot <- my.data %>%
+  group_by(DRUG.USE) %>%
+  summarize(income.drug.gap = mean(INCOME[SEX == "Male"]) - mean(INCOME[SEX == "Female"]),
+            upper = t.test(INCOME ~ SEX)$conf.int[1],
+            lower = t.test(INCOME ~ SEX)$conf.int[2])
+ggplot(drug.gap.plot, aes(x = reorder(DRUG.USE, income.drug.gap), y = income.drug.gap, fill = DRUG.USE)) +
+  geom_bar(stat = "identity") + geom_errorbar(aes(ymax = upper, ymin = lower), width = 0.1, size = 1) +
+  ylab("Income Gap between Men and Women") + xlab("Drug Use") + 
+  labs(title = "Figure 2.5.3 Drug Use and Sex-related Income Gap Bar Plot") + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+Finally, we create a plot analysis as Figure 2.5.6. We find similar result as previous analysis. Though the average sex-related income gap of No group is lower than that of Yes group, the error bar overlaps with the bar of No group. It might be due to the relatively small size of Yes group (`r sum(my.data$DRUG.USE == "Yes")`respondents in total) compared to No group (`r sum(my.data$DRUG.USE == "No")`respondents in total). We may conclude that given the data set, drug use does not have impact of the income gap between men and women. However, the conclusion might change if a larger dataset (to be specific, a dataset with larger number of Yes respondents in Drug Use) is provided.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+par(mfrow = c(2, 2))
+plot(drug.lm.interactive, caption = "Figure 2.5.4 Diagnostic Graphs")
+```
+
+According to the diagnostic graphs, the residuals do not have constant variance against fitted values. The residuals are approxitely normal based on the QQ plot, though there is a tailed distribution. There is no discernible trend in scale-location plot. There is no outlier in the model.
+
+#### **2.6 Education & Income**
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# RELOAD my.data
+my.data <- reload_mydata()
+```
+##### **2.6.1 Overview**
+
+Education may impact the income gap between Men and Women. When people have higher education degree, they may access to better jobs and have higher earning. We are interested in whether the income gap still exits in the group of well-educated people.
+
+Here we choose variable T66573(`EDUCATION.LEVEL`) to describe the education background of respondents. `EDUCATION.LEVEL` gives the highest degree that a person ever received. It has `r sum(my.data$EDUCATION.LEVEL<0)` negative responses. As these data are unreliable, we will exclude them before we perform analysis. Besides, the original dataset has numeric values for `EDUCATION.LEVEL`. We assign more reasonable label names to those values, representing different education degrees.
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+my.data <- mutate(my.data, 
+                  EDUCATION.LEVEL = recode_factor(EDUCATION.LEVEL,
+                                                `0` = "None",
+                                               `1` = "GED",
+                                               `2` = "High school diploma",
+                                               `3` = "Associate/Junior college (AA)",
+                                               `4` = "Bachelor's degree (BA, BS)",
+                                               `5` = "Master's degree (MA, MS)",
+                                               `6` = "PhD",
+                                               `7` = "Professional degree (DDS, JD, MD)",
+                                               `-3` = "Missing",
+                                               `-5` = "Missing"))
+my.data <- my.data[!(my.data$EDUCATION.LEVEL == "Missing"),]
+```
+
+After manipulating the dataset, we analyze the distribution of respondents' education background as in Figure 2.6.1. In the low-end education such as GED and high school, there are more males than female in the respondents. While in the high-end education higher than high school, there are more female respondents.
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+edu.dis <- my.data %>%
+  group_by(EDUCATION.LEVEL, SEX) %>%
+  summarise(n=n())
+ggplot(edu.dis, aes(x = EDUCATION.LEVEL, y = n, fill = SEX, label = n)) + 
+  geom_bar(stat = "identity", position = "dodge") + 
+  theme(axis.text.x=element_text(angle = -60, vjust = 0.5)) + 
+  ylab("Number of respondents") + xlab("Education Background") + 
+  labs(title = "Figure 2.6.1 Education Background and Sex Features among Respondents") + 
+  geom_text(size = 4, position = position_dodge(width=0.9)) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+##### **2.6.2 Does Education Background Affect the Income Gap between Men and Women?**
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+edu.lm <- lm(INCOME ~ SEX + EDUCATION.LEVEL, my.data)
+summary(edu.lm)$coef %>%
+  kable(caption = "Table 2.6.1 Summary of the Simple Linear Regression") %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+edu.inter.lm <- lm(INCOME ~ SEX + EDUCATION.LEVEL + EDUCATION.LEVEL*SEX, my.data)
+summary(edu.inter.lm)$coef %>%
+  kable(caption = "Table 2.6.2 Summary of the Interactive Linear Regression") %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+
+In the regression result of a simple model (`INCOME ~ SEX + EDUCATION.LEVEL`) in Table 2.6.2, we can conclude that income is significantly related to education (5% significance level for GED category while 1% significance level for other categories). After that, we perform an interactive regression model (`INCOME ~ SEX + EDUCATION.LEVEL + EDUCATION.LEVEL*SEX`) and the result is in Table 2.6.3. It indicates that there is no statistically significant relationship between education and sex-related income gap.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+edu.gap.plot <- my.data %>%
+  group_by(EDUCATION.LEVEL) %>%
+  summarize(income.edu.gap = mean(INCOME[SEX == "Male"]) - mean(INCOME[SEX == "Female"]),
+            upper = t.test(INCOME ~ SEX)$conf.int[1],
+            lower = t.test(INCOME ~ SEX)$conf.int[2])
+ggplot(edu.gap.plot, aes(x = reorder(EDUCATION.LEVEL, income.edu.gap), y = income.edu.gap, fill = EDUCATION.LEVEL)) +
+  geom_bar(stat = "identity") + geom_errorbar(aes(ymax = upper, ymin = lower), width = 0.1, size = 1) +
+  ylab("Income Gap between Men and Women") + xlab("Education Background") + 
+  labs(title = "Figure 2.6.2 Education and Sex-related Income Gap") + 
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  theme(axis.text.x=element_text(angle = -60, vjust = 0.5))
+
+```
+
+We also create a descriptive plot to capture the relationship between education and income gap. In Figure 2.6.4, the error bars of different education categories overlap with each other, suggesting that there is no significant difference between income gap of different education categories. Besides, the error bars of Professional degree and PhD is extremely large, mainly due to the limited sample size in these two education category.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+par(mfrow = c(2, 2))
+plot(edu.inter.lm, caption = "Figure 2.6.3 Diagnostic Graphs")
+```
+
+According to the diagnostic graphs, the residuals do not have constant variance against fitted values. The residuals are approxitely normal based on the QQ plot, though there is a tailed distribution. There is an increasing trend in scale-location plot. There is no outlier in the model.
+
+#### **2.7 Marital Status**
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# prepare the dataset for the following analysis
+reload_my.data <- function(){
+  
+  nlsy <- read_csv("nlsy97_Nov2020.csv")
+
+  as.data.frame(nlsy)
+  
+  my.data<- nlsy %>% select(B0004600, E8043100, R0000100, R0070000, R0536300,R0648900, R1205300, R1217600, R1482600, R2191500, T0026000, T6656700, T6657300, U1852400, U2857200)
+  
+  colnames(my.data)<-c("CUMULATIVE.GPA","TOTAL.INC", "PUB_ID", "SAFE.SCH", "SEX", "HARD.TIMES", "REL.PARENT", "RESIDENCE", "RACE", "DRUG.USE","#CHILDREN", "FAM.INCOME", "EDUCATION.LEVEL", "MARITAL.STATUS", "INCOME")
+
+  col_order<- c("PUB_ID","INCOME", "SEX", "RACE","MARITAL.STATUS", "REL.PARENT", "HARD.TIMES", "FAM.INCOME",  "CUMULATIVE.GPA","TOTAL.INC", "SAFE.SCH", "RESIDENCE", "DRUG.USE","#CHILDREN", "EDUCATION.LEVEL")
+  my.data<- my.data[, col_order]
+  
+  #to count invalid values in each variable
+  my.count <- my.data[, col_order]
+  
+  my.data<-my.data %>% 
+    mutate(MARITAL.STATUS = recode_factor(MARITAL.STATUS, '0'="Never married", '1'="married", '2'="separated", '3' = "Divorced", '4'="widowed", '-3'="invalid skip", '-5'='no response')) %>%
+    mutate(HARD.TIMES = recode_factor(HARD.TIMES, '0'="NO", '1'="YES", '-4'="VALID SKIP", '-1'= "REFUSAL", '-2'="DONT KNOW")) %>%
+    mutate(REL.PARENT= recode_factor(REL.PARENT, '1'= "Both biological parents",  '2'="Two parents, biological mother", '3'="Two parents, biological father", '4'="Biological mother only", '5'="Biological father only", '6'="Adoptive parents", '7'="Foster parents", '8'="No parents, grandparents", '9'="No parents, other relatives", '10'="Anything else", '-3'='invaid skip')) %>%
+    mutate(SEX= recode_factor( SEX, '1'="MALE", '2'= "FEMALE")) %>%
+    mutate(INCOME.valid = ifelse(INCOME <= 0, 'Skipped/Not Interviewed', 
+                                 ifelse(INCOME < max(INCOME), 'Valid', 'Top-Truncated')))    %>% mutate(FAM.INCOME.valid = ifelse(FAM.INCOME <= 0, 'Skipped/Not Interviewed', 
+                                 ifelse(FAM.INCOME < max(FAM.INCOME), 'Valid', 'Top-Truncated')))
+
+  my.data$MARITAL.STATUS<-toupper(my.data$MARITAL.STATUS)
+  my.data$REL.PARENT <- toupper(my.data$REL.PARENT)
+  my.data<-subset(my.data, INCOME.valid!='Skipped/Not Interviewed' & INCOME.valid!='Top-Truncated')
+  my.data<-subset(my.data, FAM.INCOME.valid!='Skipped/Not Interviewed' & FAM.INCOME.valid!='Top-Truncated')
+  
+  return(my.data)
+}
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# RELOAD my.data
+my.data <- reload_my.data()
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+# Separate dataframes were constructed to ensure the integrity of data for the other variables. If invalid skips were dropped in one variable, we didnt want to loose those records from the rest of the dataframe.
+#df for marital status
+my.data.MS<-subset(my.data, MARITAL.STATUS!='NO RESPONSE' & MARITAL.STATUS !='INVALID SKIP')
+
+#df for hard times
+my.data.ht<- subset(my.data, HARD.TIMES!='VALID SKIP' & HARD.TIMES!='REFUSAL' & HARD.TIMES!='DONT KNOW')
+
+#df for relation with parent
+my.data.rp<- subset(my.data, REL.PARENT!='INVALID SKIP')
+
+#df for gross family income FAM.INCOME
+my.data.fi<- subset(my.data, FAM.INCOME !=-3 & FAM.INCOME !=-5 )
+```
+
+```{r, eval = FALSE, echo=FALSE, warning=FALSE, message=FALSE}
+# Checking for NA values in the variables in their respective datafram.
+sum(is.na(my.data.ht$HARD.TIMES))
+sum(is.na(my.data.MS$MARITAL.STATUS))
+sum(is.na(my.data.rp$HARD.TIMES))
+sum(is.na(my.data.fi$FAM.INCOME))
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+my.data<- reload_my.data()
+my.data.MS<-subset(my.data, MARITAL.STATUS!='NO RESPONSE' & MARITAL.STATUS !='INVALID SKIP')
+```
+##### **2.7.1 Overview**
+
+The marital status of respondents is an interesting factor to analyse with respect to its impact on income, and its interaction with sex. In the following section we analyse what extent of influence does the marital status of a respondent exert on their income. We further go on to understand if this influence is affected by the sex of the respondent.
+
+##### **2.7.2 Marital Status**
+The nsly data has divided the marital status in 5 different categories namely **Never-married**, **Married**, **Separated**, **Divorced**, **Widowed**. In the following section we analyse if the sex of a respondent and her/his marital status has sufficient interactive influence on their income. We have dropped No Response and Invalid skips in the section because in the absence of such data, it would violate the integrity of the impact of the other responses, to assume a value for them. In total there are 2312 valid responses.
+
+Let's begin with having a brief look into the three variables, to check if the data is clean and also initiate the interaction between a numerical value which is income, and categorical variable i.e. sex and marital status. 
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+avg<-my.data.MS %>%
+  group_by(SEX, MARITAL.STATUS) %>%
+  summarize(avg.income=mean(INCOME),se.in = round(sd(INCOME) / sqrt(n()), 2), count=n())
+avg %>% kable(caption = "Table 2.7.1 Summary of Sex, Income and Marital Status") %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+
+As we can see from the table, all income values are positive which means our data doesnt have negative values. Since Marital status is a non binary variable, hence we have included the standard error of income for each sex and marital status instead of t.test confidence intervals.
+
+```{r, echo=FALSE, warning=FALSE}
+ggplot(avg,aes(x=MARITAL.STATUS, y=avg.income))+geom_bar(stat="identity",position="dodge")+  xlab("Marital Status") +
+  ylab("Average Income") + 
+  labs(title = "Figure 2.7.1 Marital Status Against Average Income")
+```
+
+This bar graph clarifies that income amongst different marital status is different. We do not know if this interaction is significant and merits further analysis.
+
+```{r, echo=FALSE, warning=FALSE}
+ggplot(avg, aes(x=MARITAL.STATUS, y=avg.income, fill=SEX))+geom_bar(stat="identity",position="dodge") + xlab("Marital Status") +
+  ylab("Average Income") + 
+  labs(title = "Figure 2.7.2 Marital Status Against Average Income by Sex")
+
+```
+
+Sex of the respondent matters in income in all the marital categories as evident in this graph, we do not know if the interaction between sex and marital status is significant, and to analyse that introduce error bar into the bar graph
+
+```{r, echo=FALSE, warning=FALSE}
+ggplot(avg, aes(x=MARITAL.STATUS, y=avg.income, fill=SEX))+geom_bar(stat="identity",position="dodge")+ geom_errorbar(aes(ymax=avg.income+se.in, ymin=avg.income-se.in), width=.2, position=position_dodge(0.9))+ xlab("Marital Status") +
+  ylab("Average Income") + 
+  labs(title = "Figure 2.7.3 Marital Status Against Average Income by Sex")
+```
+
+From the graph we can observe that, except for the seperated category of marital status, the error bars for average income for male and female do not overlap, which means that the difference in income may be significant, but to be sure, lets conduct a statistical test.
+
+```{r echo=FALSE, warning=FALSE}
+options(scipen=999)
+summary(aov(INCOME ~ SEX * MARITAL.STATUS, data = my.data.MS))[[1]][,1:5]%>%
+  kable(caption = "Table 2.7.2 Anova Test",digits = c(3,3,3,20)) %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+
+```
+A two-way ANOVA was conducted that examined the effect of gender and marital status on income. There was a statistically significant interaction between the effects of gender and marital status on income, F=14.48, p = 9.16e-12. Which means that the relationship between the income and the marital status depends on the sex, and because the interaction effect between sex and the marital status is statistically significant, you cannot interpret the effect on income without considering the interaction effect.
+
+Since Marital status has 5 different vlaues, we wanted to understand sex's interaction with which of these values is significant, and for that purpose an interactive linear regression model was constructed.
+
+```{r, echo=FALSE, warning=FALSE}
+ms.lm <- lm(INCOME ~  MARITAL.STATUS * SEX, data = my.data.MS)
+options(scipen=4)
+ms.lm1<- summary(ms.lm)
+ms.lm1$coef %>%
+  kable(caption = "Table 2.7.3 Linear Regression Model",digits = c(3,3,3,20)) %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+We observe from the regression model, that the interaction between sex and marital status, with respect on imapct on income, is statistically significant limited to married and never married category only with p value = 0.01236 and 0.04695 respectively. From the counts in the Table 2.9.1, we see that for both the sexes, the maximum number of respondents are in the *Married* or *Never Married* category. This points to one of the two possibilites, either the rest of he categories do not have sufficient number of observations to be significant, or the categories percieved to be normal have higher gap in income between the two sexes.
+
+For our analysis so far to be credible, we must confirm if it was appropriate to use a linear model. It can be confirmed by plotting the lm objects.
+
+```{r, echo=FALSE, warning=FALSE}
+par(mfrow = c(2, 2))
+plot(ms.lm)
+```
+
+From the residual vs fitted plot, we can see that linearity seems to hold reasonably well, as the red line is close to the dashed line. If the data was not linear, there would have been a pattern to the residuals which is not seen here.
+
+The QQ plot shows that the data has a heavy right tail and a light left tail.
+
+There seems to be no discernible pattern in the Scale vs Location plot either, which means we have a constant variance.
+
+In the residual vs leverage plot, we see no outlier values, as evidenced by the absence of Cook's distance dashed line which implies none of the points come close to having both high residual and leverage.
+
+Hence we can conclude that a linear model is appropriate for this set of variables.
+
+
+#### **2.8 R EVER LIVE THROUGH HARD TIMES?**
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+my.data <- reload_my.data()
+my.data.ht<- subset(my.data, HARD.TIMES!='VALID SKIP' & HARD.TIMES!='REFUSAL' & HARD.TIMES!='DONT KNOW')
+```
+##### **2.8.1 Overview**
+Sometimes children go through hard times. For example, they live in a place 
+without water or electricity, or in a homeless shelter. So the question that was asked was, to the best of your knowledge, has you ever experienced such hard times. 
+
+In this section we analyse if the perception of having gone through difficult times has an impact on the future income of the individual? And if so, what role does the sex of the individual play in that analysis.
+
+The variable takes on 2 valid values of *Yes* and *No*. There are 7900 valid answers in this data set for this variable.
+
+To begin with, lets understand what kinds of values of income are available for our two variables of interest. Since hard times is a binary value variable, hence for the Confidence Intervals we have used t test outcomes.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+avg.ht<-my.data.ht %>%
+  group_by(SEX, HARD.TIMES) %>%
+  summarize(avg.income=mean(INCOME),lower = t.test(INCOME)$conf.int[1],
+            upper = t.test(INCOME)$conf.int[2],
+            p_value = t.test(INCOME)$p.value) 
+avg.ht %>% kable(caption = "Table 2.8.1 Summary of Sex, Income and Hard Times") %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+
+A brief look at the graph shows us that income in each group is different and warrants further investigation.
+
+```{r, echo=FALSE, warning=FALSE}
+ggplot(avg.ht, aes(x=HARD.TIMES, y=avg.income, fill=SEX))+geom_bar(stat="identity",position="dodge") +
+xlab("Subjective Perception of Hard Times") +
+  ylab("Average Income ") +
+  labs(title = "Figure 2.8.1 Summary of Income, Sex and Hard Times")
+```
+
+From the bar graph we understand that the income of people who havent had hard time in their childhood is in general higher than those who have had hard times in their childhood.
+
+```{r, echo=FALSE, warning=FALSE}
+summary(aov(INCOME ~ SEX * HARD.TIMES, data = my.data.MS))[[1]][,1:5]%>%
+  kable(caption = "Table 2.8.2 Anova Test",digits = c(3,3,3,20)) %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+
+The anova test shows that the interaction between hard times and sex is not statistically signifiant, hence the relationship between the hardtimes and income can be analysed without considering the interation between sex and hard times.
+
+```{r, echo=FALSE, warning=FALSE}
+ht.lm <- lm(INCOME ~ HARD.TIMES * SEX,data= my.data.ht )
+ht.lm1<- summary(ht.lm)
+ht.lm1$coef %>% kable(caption = "Table 2.8.3 Linear Regression Model",digits = c(3,3,3,20)) %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+
+It is thus further confirmed that while SEX nd HARDTIMES are individually statistically singnificant indicators of INCOME, the interaction between them does not have significant impact on the income.
+
+```{r, echo=FALSE, warning=FALSE}
+ht.lm.noin <- lm(INCOME ~ HARD.TIMES + SEX,data= my.data.ht )
+ht.lm.noin <- summary(ht.lm.noin)
+ht.lm.noin$coef %>%
+kable(caption = "Table 2.8.4 Linear Regression Model without interaction",digits = c(3,3,3,20)) %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+
+It is thus further confirmed that while SEX nd HARDTIMES are individually statistically singnificant indicators of INCOME, the interaction between them does not have significant impact on the income. Since the interaction is insignificant, we further check what influence did the variables Sex and Hard Times have on income, independently.
+
+```{r, echo=FALSE, warning=FALSE}
+par(mfrow = c(2, 2))
+plot(ht.lm)
+```
+
+From the residual vs fitted plot, we can see that linearity seems to hold reasonably well, as the red line almost coincides with the dashed line. If the data was not linear, there would have been a pattern to the residuals which is not seen here.
+
+The QQ plot shows that the data has a heavy right tail and a light left tail.
+
+There seems to be no discernible pattern in the Scale vs Location plot either, which means we have a constant variance.
+
+In the residual vs leverage plot, we see no outlier values, as evidenced by the absence of Cook's distance dashed line which implies none of the points come close to having both high residual and leverage, and the red line almost coincides with the dashed line, means that the data is linear, and no one value of x influences y heavily.
+
+Hence we can conclude that a linear model is appropriate for this set of variables.
+
+Because the impact of hard times independently on the income was highly significant, it begs to investigate the income gap, which can be found through t test.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+ht.t.test <- t.test(INCOME ~ HARD.TIMES, data = my.data.ht)
+
+ht.t.test.summary<- data.frame(difference=c(ht.t.test$estimate[1]-ht.t.test$estimate[2]),
+           t.value=c(ht.t.test$statistic),
+           p.value=c(ht.t.test$p.value),
+           lower=c(ht.t.test$conf.int[1]),
+           upper=c(ht.t.test$conf.int[2]))
+rownames(ht.t.test.summary) <- NULL
+ht.t.test.summary%>% 
+  kable(caption = "Table 2.8.5 T-test Summary",digits = c(3,3,3,3,3)) %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+ht.diff <- round(ht.t.test$estimate[1] - ht.t.test$estimate[2], 2)
+```
+
+We can see from the t.test the income of the group that said they hadnt seen hard times, is `r ht.diff` higher than the group that reported yes for having seen hard times in their childhood (t statistics=`r round(ht.t.test$statistic,4)`, p value= `r round(ht.t.test$p.value,4)`, 95% CI [`r round(ht.t.test$conf.int,1)`] ), and this difference in income is statistically significant.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+ggplot(avg.ht, aes(x=HARD.TIMES, y=avg.income, fill=SEX))+geom_bar(stat="identity",position="dodge")+ geom_errorbar(aes(ymax=lower, ymin=upper), width=.2, position=position_dodge(0.9)) + xlab("Subjective Perception of Hard Times") +
+  ylab("Average Income ") +
+  labs(title = "Figure 2.8.2 Hard Times Against Average Income by Sex")
+```
+
+From the error bars we make an interesting observation, in the group of respondents who havent had childhood hard times, the error bars in income between the two genders do not overlap, indicating there is a significant difference in their income. Where as in the group that has had hard times in their childhood, the difference in income between men and women is not significant, as we can see that the errors bar do overlap.
+
+#### **2.9 Gross Family Income**
+
+##### **2.9.1 Overview**
+
+The top-code level for variable `INCOME` is \$`r max(my.data$INCOME)`, which is far larger than `mean + 3 * sd`, which is \$`r round(mean(my.data$INCOME)+3*sd(my.data$INCOME), 2)`. The same situation also happens on variable `FAM.INCOME`, with its top-code level being \$`r max(my.data$FAM.INCOME)`, which is even larger than 3-sigma level - \$`r round(mean(my.data$FAM.INCOME)+3*sd(my.data$FAM.INCOME), 2)`
+In this way, we believe that the outliers in these two variables lie *too* far from the normal groups, and we can hence believe that it would cause significant over-estimations if we include them into our analysis.
+So, in our all following section, all top-truncated observations would be dropped, and our analysis scope is limited to the observations lying in the *normal* range.
+
+There are 6528 valid responses for this variable.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+my.data<- reload_my.data()
+my.data.fi<- subset(my.data, FAM.INCOME !=-3 & FAM.INCOME !=-5 )
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+c <- cor(my.data.fi$FAM.INCOME, my.data.fi$INCOME)
+```
+
+The correlation value = `r c` suggests that there exists a positive association between income and family income. Higher value of gross family income is associated with higher individual income.
+
+```{r, echo=FALSE, warning=FALSE}
+ggplot(my.data.fi, aes(x=FAM.INCOME, y=INCOME, colour=SEX))+geom_point()+ geom_abline() + xlab("Gross Family Income") +
+  ylab("Income") + 
+  labs(title = "Figure 2.9.1 Correlation between Gross Family Income against Income")
+```
+The graph also confirms that there is a positive association between gross family income and individual income.
+
+Let's check if sex has an impact on the relationship between income and gross family income
+
+```{r, echo=FALSE, warning=FALSE}
+summary(aov(INCOME ~ FAM.INCOME * SEX, data= my.data.fi))[[1]][,1:5]%>%
+  kable(caption = "Table 2.9.1 Anova Test",digits = c(3,3,3,20)) %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+Thus we see from the ANOVA test results that the interaction between sex and gross family income is significant, with respect to the impact on income, which implies Which means that the relationship between the income and the gross family income depends on the sex of hte individual. But the level of significance is relatively low.
+
+```{r, echo=FALSE, warning=FALSE}
+res2 <- cor.test(my.data.fi$INCOME, my.data.fi$FAM.INCOME,  method="kendall")
+```
+
+The kendal test is conducted to see the extent of correlation between income and gross family income, and if that correlation is significant. The test concludes that the z-value is `r round(res2$statistic,2)` and, at .05 significance level, the correlation is statistically significant.
+
+```{r, echo=FALSE, warning=FALSE}
+fi.lm<- lm(INCOME ~ FAM.INCOME * SEX,data= my.data.fi)
+fi.lm1 <- summary(fi.lm)
+fi.lm1$coef %>%
+  kable(caption = "Table 2.9.2 Linear Regression Model",digits = c(3,3,3,20)) %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+From the Linear regression model we can see that the interaction between gross family income of the respondent and his gender has a low but significant influence on the income of the respondent.
+
+```{r, echo=FALSE, warning=FALSE}
+par(mfrow = c(2, 2))
+plot(fi.lm)
+```
+
+The distribution of the residuals is quite well concentrated around 0 for small fitted values, but they get more and more spread out as the fitted values increase. This is an instance of “increasing variance”, which means the data might not be linear and requires further analysis.
+
+The scale location plot has a clear upward slope in the red trend line. This tells us we have non-constant variance.
+
+in the normal QQ plot we see a QQ plot we see that the residuals deviate from the diagonal line in both the upper and lower tail. We see that the tails are observed to be ‘heavier’ (have larger values) than what we would expect under the standard modeling assumptions. This is indicated by the points forming a “steeper” line than the diagonal.
+
+Even thought the red line in the Leverage vs Residual plot, doesnt coincide with the dashed line, there is no Cook's line present means the data doesnt have very high outlier values.
+So it is safe to consider this data for a linear model.
+
+#### **2.10 Respondent's Relationship to Household Parent Figure**
+
+##### **2.10.1 Overview**
+
+A number of studies has often asked the question of Nature vs Nurture. It is through such data sets that the answer can be further investigated. The relationship with the household parent figure has a massive impact on people's life. This impact is numerically coded in the form of income. And we intend to analyse the role sex plays in this interaction.
+
+The Relationship to Household Parent Figure variable is categoried in 10 different values namely *Both biological parents*,   *Two parents, biological mother*, *Two parents, biological father*, *Biological mother only*, *Biological father only*, *Adoptive parents*, *Foster parents*, *No parents, grandparents*, *No parents, other relatives*, *Anything else*. There are 8953 valid values in reponse for this variable.
+
+Reloading the data:
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+my.data<- reload_my.data()
+my.data.rp<- subset(my.data, REL.PARENT!='INVALID SKIP')
+```
+
+Let's begin with having a brief look into the three variables, to check if the data is clean and also initiate the interaction between a numerical value which is income, and categorical variables i.e sex and relationship with parent.  Since Relationship with parent is a non binary categorical variable, we have included the standard error of income for each sex and marital status instead of t.test confidence intervals.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+avg.rp<-my.data.rp %>%
+  group_by(SEX, REL.PARENT) %>%
+  summarize(avg.income=mean(INCOME),se.in = round(sd(INCOME) / sqrt(n()), 2))
+avg.rp %>% kable(caption = "Table 2.10.1 Summary of Sex, Income and Relationship with Parent") %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+
+```{r, echo=FALSE, warning=FALSE}
+ggplot(avg.rp, aes(x=REL.PARENT, y=avg.income, fill=SEX))+geom_bar(stat="identity",position="dodge")+ geom_errorbar(aes(ymax=avg.income+se.in, ymin=avg.income-se.in), width=.2, position=position_dodge(0.9))+theme(axis.text.x = element_text(angle = 60, hjust = 1)) +xlab("Relationship with Household Parent Figure") +
+  ylab("Average Income") + 
+  labs(title = "Figure 2.10.1 Relationship with Parent Against Average Income by Sex")
+```
+
+The bar graph gives us a picture of the extent of interaction between sex, income and relationship with parent. The error bars do show us whether the interaction is significant or not, but category by category. We need to further investigate if the interaction between gender and relationship with parent as a whole variable is significant. 
+
+```{r, echo=FALSE, warning=FALSE}
+summary(aov(INCOME ~ SEX * REL.PARENT, data = my.data.fi))[[1]][,1:5]%>%
+  kable(caption = "Table 2.10.2 Anova Test",digits = c(3,3,3,20)) %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+```
+
+Anova test we understand that the relationship between income and relationship with parent is not influenced significantly why the interaction between the gender of the individual and her/his relationship with parents. Let us investigate it further with a linear regression model
+
+```{r, echo=FALSE, warning=FALSE}
+
+rp.lm <- lm(INCOME ~  REL.PARENT * SEX, data = my.data.fi)
+options(scipen=20)
+rp.lm1<- summary(rp.lm)
+rp.lm1$coef  %>% 
+  kable(caption = "Table 2.10.3 Linear Regression Model",digits = c(3,3,3,20)) %>%
+  kable_styling(bootstrap_options = c("striped"))%>%
+  row_spec(0, color = "white", background = "#C0002B")
+
+```
+
+Linear regression model clarifies that the interaction between sex and relationship with parents has no impact on influence of relationship with parents of the individual on their income. What is interesting is to to notice that individuals with both biological parents which can we called a normal household, are the ones whose gender seems to have a significant interaction with their relationship to parents with respect to their income.
+
+It maybe because we have maximum number od responses with those values, and the number of values in the other categories being smaller in number, dont have a significant imapct or the categories percieved to be normal have higher gap in income between the two sexes.
+
+```{r, echo=FALSE, warning=FALSE}
+par(mfrow = c(2, 2))
+plot(rp.lm)
+```
+
+All the plots show that the distribution of data for this variable can be considered linear, and hence our linear regression model holds true.
+
+
+### <font color="#C0002B"><b>Part 3 Conclusion and Discussion</b></font>
+
+#### **3.1 Major Findings and Conclusions**
+
+From the ten section of analysis above, we have following major findings and conclusions regarding these topics:
+
+* Growing environment has a mixed impact for the respondents' future income. As for the feeling of campus safety, it displays a positive association between the income - the safer environment you are in, the better achievement you might probably get. But the urban/rural background does not have a significant impact on the respondents' income. Both of these effects do not have a significant difference in terms of gender.
+
+* Child-raising has a strong and complecated impact on the respondents' income. Generally speaking, the more child a person raises, the lower income he/she might get. But seeing from a gender's standpoint, child-raising brings positive influence to men's income, but has a significantly negative association to women's income.
+
+* Crime history, measured by incarceration history in our analysis, has a significant effect on income. Specifically, there is statistically significant relationship between incarceration history and income - people with incarceration history earn $16205.59 less than those without incarceration history. But incarceration history has no significant impact on the income gap between men and women.
+
+* Race is also a huge factor that has significant impact on the income gap. For example, the income gap between black men and black women is the smallest (\$6306.91), but the sex-related income gap for Hispanic is \$14732.18 that for Non-Black/Non Hispanic groups is \$14118.54.
+
+* We expect that people that never used drug will earn more than those that have ever used drug. But the statistical analysis indicates that whether using a drug or not does not significantly related to the income level.
+
+* While education level can have strong positive association to people's income, there does not seem to be statistically significant relationship between education and sex-related income gap. Specifically, in the GED and master-level group, the income gaps between men and women are slightly narrower, while people in the high-school-diploma groups have a wider one. But these difference seems not significant statistically.
+
+* The marital status of respondents is an interesting factor to analyse with respect to its impact on income, and its interaction with sex. Generally, there are no significant difference in income among people in different marital status groups. But there was a statistically significant interaction between the effects of gender and marital status on income.
+
+* Hard time experience, measured by possible experience of living without water or electricity, or in a homeless shelter, has a negative impact on people income in general. And this effect does not show a significant gender-related difference.
+
+* According to our analysis, there is a positive association between gross family income and individual income. And we can also see that the interaction between gross family income of the respondent and his gender has a low but significant influence on the income of the respondent. Specifically, the positive association between family and individual income is observed to be smaller for female.
+
+* For people who answered different kinds of relationship to their parent, the income gaps between male and female does vary. For example, individuals with both biological parents which can we called a normal household, are the ones whose gender seems to have a significant interaction with their relationship to parents with respect to their income. But similar effects in other group do not seem to be significant.
+
+#### **3.2 Discussion**
+
+Given that the factors that might influence income can be fairly complicated in the real world, we believe that our analysis still have following limits and drawbacks.
+
+* The settings of regression formula in some models can be improved or corrected. According the diagnostic plots of some regression models in our analysis, there could be discrepancies between our formula setting and the fundamental assumptions of the linear model (e.g. residuals are not normally distributed). In possible follow-up studies in the future, more appropriate setting of regression models can be used to reduce systematic bias.
+
+* More control variables can be considered in the analysis. Since our analysis is mainly focused on each specific topic, control variables are not being considered in some of our models. In possible follow-up studies, control variables need to be carefully selected to avoid the interference from irrelevant factors. 
+
+* In this report, we ran regression on one ore two variables. In the further analysis, we may consider having an aggregated linear regression on vairaibles that we find have statistically significant impace on sex-related income gap. We may find how the significance level will change in the aggregated model. However, it may include more interactive items in the model.
+
+* We have considered a lot of factors in our analysis. However, in some categories, the sample size is quite small, which lead to an inaccurate regression result (for example, the Yes group in incarceration history and the Yes group in drug use). The result may be improved if a larger sample of such groups is provided.
+
+* We dropped top-coded values in our analysis. Therefore, our results are limited to people earning ordinary level of income.
+
+* We dropped some meaningless values (negative values in the responses) because they are unreliable.
+
+### <font color="#C0002B"><b>References</b></font>
+
+[1] U.S. Bureau of Labor Statistics. ["National Longitudinal Surveys"](https://www.bls.gov/nls/home.htm). *bls.gov*. Accessed in 2020 Dec.  
+[2] Pergamit, Michael R. "How the Federal Government Uses Data from the National Longitudinal Surveys." *NLS Discussion Paper* No. 92-1, Washington DC: U.S. Bureau of Labor Statistics, 1991.  
+[3] U.S. Bureau of Labor Statistics. ["NLSY97 Data Overview"](https://www.bls.gov/nls/nlsy97.htm). *bls.gov*. Accessed in 2020 Dec.
+
+**Acknowledgment**  
+Sanjana contributed more to Section 2.7 to 2.10; Zhexin contributed more to Section 2.3 to 2.6; Chengyu contributed more to Part 1 and Section 2.1 to 2.2. The main ideas, including the structure and methodologies, come from collective wisdom.
